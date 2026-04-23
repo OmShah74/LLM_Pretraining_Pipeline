@@ -1,0 +1,87 @@
+runtime:
+  profile_name: production_family_spec
+  project_root: .
+  artifact_dir: artifacts
+  seed: 42
+  device: auto
+  use_mixed_precision: true
+  gradient_checkpointing: true
+
+data:
+  raw_dir: artifacts/data/raw
+  processed_dir: artifacts/data/processed
+  tokenizer_path: artifacts/tokenizer/tokenizer.json
+  tokenizer_type: byte_level_bpe
+  require_real_data: true
+  pretrain_filename: pretrain.jsonl
+  sft_filename: sft.jsonl
+  dpo_filename: dpo.jsonl
+  grpo_filename: grpo.jsonl
+  max_vocab_size: 32000
+  min_frequency: 2
+  val_ratio: 0.05
+  pretrain_seq_len: 2048
+  sft_seq_len: 2048
+  dpo_seq_len: 2048
+  min_chars: 50
+  max_chars: 12000
+  dedup: true
+  strip_html: true
+  lowercase: false
+  dataset_plan:
+    pretrain:
+      - FineWeb-Edu
+      - SlimPajama curated mix
+      - StarCoderData small code slice if coding focus
+    sft:
+      - OpenHermes style cleaned instruction mix
+      - Dolly/Alpaca/ShareGPT cleaned blend
+    dpo:
+      - UltraFeedback
+      - HelpSteer style preference pairs
+
+model:
+  vocab_size: 32000
+  max_seq_len: 2048
+  hidden_size: 2048
+  num_layers: 24
+  mlp_hidden_size: 5504
+  dropout: 0.0
+  pad_token_id: 0
+  bos_token_id: 1
+  eos_token_id: 2
+  tie_embeddings: true
+  attn:
+    num_heads: 16
+    num_kv_heads: 4
+    dropout: 0.0
+    rope_base: 10000
+  moe:
+    enabled: true
+    num_experts: 16
+    top_k: 2
+    capacity_factor: 1.25
+    aux_loss_weight: 0.01
+    shared_expert: true
+    expert_hidden_mult: 4.0
+    expert_interval: 1
+
+train:
+  batch_size: 8
+  eval_batch_size: 8
+  learning_rate: 0.0003
+  weight_decay: 0.1
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  adam_epsilon: 1.0e-08
+  epochs: 1
+  max_steps: 1000
+  grad_accum_steps: 8
+  grad_clip: 1.0
+  log_every_steps: 10
+  eval_every_steps: 100
+  save_every_steps: 100
+  warmup_steps: 100
+  lr_scheduler: cosine
+  min_lr_ratio: 0.1
+  resume_from:

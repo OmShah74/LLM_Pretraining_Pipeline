@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+*.pyo
+.pytest_cache/
+.benchmarks/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Notebooks / editors
+.ipynb_checkpoints/
+.vscode/
+
+# Build / logs
+build/
+dist/
+*.log
+
+# Training artifacts
+artifacts/
+checkpoints/
+outputs/
+runs/
+wandb/
+tb_logs/
+tensorboard/
+
+# Model files
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.ckpt
+*.gguf
+*.onnx
+
+# Tokenizers / processed data
+tokenizer.json
+tokenizer.model
+*.jsonl
+*.parquet
+*.arrow
+*.idx
+*.npy
+*.npz
+
+# OS files
+Thumbs.db
+.DS_Store

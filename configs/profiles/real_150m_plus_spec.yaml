@@ -1,0 +1,152 @@
+runtime:
+  profile_name: real_150m_plus_spec
+  project_root: .
+  artifact_dir: artifacts
+  seed: 42
+  device: auto
+  use_mixed_precision: true
+  gradient_checkpointing: true
+
+data:
+  raw_dir: artifacts/data/raw
+  processed_dir: artifacts/data/processed
+  tokenizer_path: artifacts/tokenizer/tokenizer.json
+  tokenizer_type: byte_level_bpe
+  require_real_data: true
+  use_streaming_sources: true
+  streaming_cache_dir: artifacts/cache/hf
+  stream_sources:
+    - name: fineweb_edu
+      role: pretrain
+      path: HuggingFaceFW/fineweb-edu
+      name_config: sample-10BT
+      split: train
+      text_field: text
+      shuffle: true
+      shuffle_buffer: 50000
+      take: 40000
+    - name: slimpajama
+      role: pretrain
+      path: cerebras/SlimPajama-627B
+      split: train
+      text_field: text
+      shuffle: true
+      shuffle_buffer: 50000
+      take: 20000
+    - name: alpaca_cleaned
+      role: sft
+      path: ModelCloud/alpaca-data-cleaned
+      split: train
+      prompt_field: instruction
+      response_field: output
+      take: 20000
+    - name: dolly_15k
+      role: sft
+      path: databricks/databricks-dolly-15k
+      split: train
+      prompt_field: instruction
+      response_field: response
+      take: 15000
+    - name: ultrafeedback_cleaned
+      role: dpo
+      path: mlabonne/ultrafeedback-binarized-preferences-cleaned
+      split: train
+      prompt_field: question
+      chosen_field: chosen
+      rejected_field: rejected
+      take: 25000
+    - name: gsm8k
+      role: grpo
+      path: openai/gsm8k
+      name_config: main
+      split: train
+      prompt_field: question
+      reference_field: answer
+      take: 6000
+  pretrain_filename: pretrain.jsonl
+  sft_filename: sft.jsonl
+  dpo_filename: dpo.jsonl
+  grpo_filename: grpo.jsonl
+  max_vocab_size: 32000
+  min_frequency: 2
+  val_ratio: 0.02
+  pretrain_seq_len: 512
+  sft_seq_len: 512
+  dpo_seq_len: 512
+  min_chars: 50
+  max_chars: 12000
+  dedup: true
+  strip_html: true
+  lowercase: false
+  quality_threshold: 0.42
+  min_alpha_fraction: 0.62
+  max_line_repeat_ratio: 0.2
+  simhash_bits: 64
+  simhash_bands: 4
+  max_records_per_role:
+    pretrain: 50000
+    sft: 30000
+    dpo: 25000
+    grpo: 6000
+  dataset_plan:
+    pretrain:
+      - FineWeb-Edu curated slice
+      - SlimPajama curated slice
+      - permissive code mix if coding capability is required
+    sft:
+      - OpenHermes style instruction data
+      - Dolly/Alpaca cleaned blend
+    dpo:
+      - UltraFeedback
+      - HelpSteer or curated preference set
+    grpo:
+      - prompts plus reward references or verifiable tasks
+
+model:
+  vocab_size: 32000
+  max_seq_len: 512
+  hidden_size: 768
+  num_layers: 18
+  mlp_hidden_size: 2048
+  dropout: 0.0
+  pad_token_id: 0
+  bos_token_id: 1
+  eos_token_id: 2
+  tie_embeddings: true
+  attn:
+    num_heads: 12
+    num_kv_heads: 4
+    dropout: 0.0
+    rope_base: 10000
+  moe:
+    enabled: true
+    num_experts: 8
+    top_k: 2
+    capacity_factor: 1.25
+    aux_loss_weight: 0.01
+    shared_expert: true
+    expert_hidden_mult: 2.5
+    expert_interval: 2
+
+train:
+  batch_size: 1
+  eval_batch_size: 1
+  learning_rate: 0.0002
+  weight_decay: 0.1
+  adam_beta1: 0.9
+  adam_beta2: 0.95
+  adam_epsilon: 1.0e-08
+  epochs: 1
+  max_steps: 2000
+  grad_accum_steps: 32
+  grad_clip: 1.0
+  log_every_steps: 10
+  eval_every_steps: 100
+  save_every_steps: 100
+  warmup_steps: 100
+  lr_scheduler: cosine
+  min_lr_ratio: 0.1
+  grpo_group_size: 4
+  grpo_beta: 0.02
+  grpo_max_new_tokens: 64
+  resume_from:

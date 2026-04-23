@@ -1,0 +1,30 @@
+from __future__ import annotations
+
+import argparse
+from dataclasses import asdict
+from pathlib import Path
+
+from src.data.pipeline import run_data_prep
+from src.utils.config import load_full_config
+from src.utils.io import write_json
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run the data preparation pipeline.")
+    parser.add_argument("--config", required=True, help="Path to a YAML config file.")
+    args = parser.parse_args()
+
+    config = load_full_config(args.config)
+    results = run_data_prep(config["data"])
+    summary = {
+        "raw": [manifest.to_dict() for manifest in results["raw"]],
+        "cleaned": [manifest.to_dict() for manifest in results["cleaned"]],
+        "tokenizer": results["tokenizer"].to_dict(),
+        "packed": [manifest.to_dict() for manifest in results["packed"]],
+        "mixture": results["mixture"].to_dict(),
+    }
+    write_json(Path(config["data"].processed_dir) / "data_prep_summary.json", summary)
+
+
+if __name__ == "__main__":
+    main()

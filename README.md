@@ -73,40 +73,69 @@ Still not industrial-grade:
 python -m pip install -r requirements.txt
 ```
 
-2. Prepare streamed data, cleaned corpora, manifests, tokenizer, and packed sequences
+2. Validate the streaming sources first
+```bash
+python -m src.data.prepare --config configs/profiles/real_150m_plus_spec.yaml --validate-only
+```
+
+3. Optional: validate only one role
+```bash
+python -m src.data.prepare --config configs/profiles/real_150m_plus_spec.yaml --validate-only --roles pretrain
+```
+
+4. Prepare streamed data, cleaned corpora, manifests, tokenizer, and packed sequences
 ```bash
 python -m src.data.prepare --config configs/profiles/real_150m_plus_spec.yaml
 ```
 
-3. Run pretraining
+5. Run pretraining
 ```bash
 python -m src.train.pretrain --config configs/profiles/real_150m_plus_spec.yaml
 ```
 
-4. Run SFT
+6. Run SFT
 ```bash
 python -m src.train.sft --config configs/profiles/real_150m_plus_spec.yaml
 ```
 
-5. Run DPO
+7. Run DPO
 ```bash
 python -m src.train.dpo --config configs/profiles/real_150m_plus_spec.yaml
 ```
 
-6. Run GRPO
+8. Run GRPO
 ```bash
 python -m src.train.grpo --config configs/profiles/real_150m_plus_spec.yaml
 ```
 
-7. Run evaluation
+9. Run evaluation
 ```bash
 python -m src.eval.evaluate --config configs/profiles/real_150m_plus_spec.yaml --stage dpo
 ```
 
-8. Export artifacts
+10. Export artifacts
 ```bash
 python -m src.inference.export --config configs/profiles/real_150m_plus_spec.yaml --stage dpo
 ```
+
+## How To Tell Whether Streaming Is Working
+When a full prep run is working you should see log lines like:
+- `[data.prepare] streaming role=pretrain source=fineweb_edu ...`
+- `[data.prepare] completed role=pretrain rows=... output=...`
+
+When source validation is working, it writes:
+- `artifacts/data/processed/data_source_validation.json`
+
+When full prep completes, you should see:
+- `artifacts/data/processed/*_stream_cleaned.jsonl`
+- `artifacts/data/processed/*_manifest.json`
+- `artifacts/data/processed/data_prep_summary.json`
+
+If a dataset source is bad, you should now get an explicit error naming:
+- source name
+- Hugging Face path
+- optional config/subset
+- split
 
 ## Practical Readiness
 Ready now:

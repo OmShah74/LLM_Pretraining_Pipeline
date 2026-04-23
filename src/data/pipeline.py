@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Iterable
 
 from src.data.quality import ApproxDeduper, quality_score
-from src.data.streaming import get_stream_sources_for_role, iter_stream_source
+from src.data.streaming import get_stream_sources_for_role, iter_stream_source, validate_stream_source
 from src.data.tokenizer import BPETokenizer
 from src.utils.contracts import DataConfig, DatasetManifest, TokenizerArtifact
 from src.utils.io import ensure_dir, read_json, read_jsonl, write_json, write_jsonl
@@ -106,6 +106,7 @@ def _stream_and_clean_role(role: str, config: DataConfig) -> DatasetManifest | N
     cleaned_rows: list[dict[str, str]] = []
 
     for source in sources:
+        print(f"[data.prepare] streaming role={role} source={source['name']} path={source['path']} split={source.get('split', 'train')}")
         for row in iter_stream_source(source, config):
             cleaned = _clean_record(role, row, config)
             if cleaned is None:
@@ -131,7 +132,24 @@ def _stream_and_clean_role(role: str, config: DataConfig) -> DatasetManifest | N
         metadata={"streaming": True, "sources": [source["name"] for source in sources]},
     )
     write_json(processed_dir / f"{manifest.name}_manifest.json", manifest.to_dict())
+    print(f"[data.prepare] completed role={role} rows={rows_written} output={output_path}")
     return manifest
+
+
+def validate_stream_sources(config: DataConfig, roles: list[str] | None = None) -> dict[str, object]:
+    requested_roles = set(roles or [source.get("role") for source in config.stream_sources if source.get("enabled", True)])
+    reports: list[dict[str, object]] = []
+    for source in config.stream_sources:
+        if not source.get("enabled", True):
+            continue
+        role = str(source.get("role"))
+        if role not in requested_roles:
+            continue
+        report = validate_stream_source(source, config)
+        reports.append(report)
+    if not reports:
+        raise ValueError("No enabled streaming sources matched the requested roles.")
+    return {"validated_sources": reports}
 
 
 def prepare_raw_sources(config: DataConfig) -> list[DatasetManifest]:

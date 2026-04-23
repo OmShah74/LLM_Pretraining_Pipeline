@@ -17,6 +17,7 @@ data:
   streaming_cache_dir: artifacts/cache/hf
   stream_sources:
     - name: fineweb_edu
+      enabled: true
       role: pretrain
       path: HuggingFaceFW/fineweb-edu
       name_config: sample-10BT
@@ -26,6 +27,7 @@ data:
       shuffle_buffer: 10000
       take: 4000
     - name: slimpajama
+      enabled: true
       role: pretrain
       path: cerebras/SlimPajama-627B
       split: train
@@ -34,6 +36,7 @@ data:
       shuffle_buffer: 10000
       take: 2000
     - name: alpaca_cleaned
+      enabled: true
       role: sft
       path: ModelCloud/alpaca-data-cleaned
       split: train
@@ -41,6 +44,7 @@ data:
       response_field: output
       take: 4000
     - name: dolly_15k
+      enabled: true
       role: sft
       path: databricks/databricks-dolly-15k
       split: train
@@ -48,6 +52,7 @@ data:
       response_field: response
       take: 4000
     - name: ultrafeedback_cleaned
+      enabled: true
       role: dpo
       path: mlabonne/ultrafeedback-binarized-preferences-cleaned
       split: train
@@ -56,6 +61,7 @@ data:
       rejected_field: rejected
       take: 2500
     - name: gsm8k
+      enabled: true
       role: grpo
       path: openai/gsm8k
       name_config: main

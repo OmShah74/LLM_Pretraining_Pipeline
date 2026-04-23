@@ -17,8 +17,19 @@ def main() -> None:
 
     config = load_full_config(args.config)
     if args.validate_only:
-        summary = validate_stream_sources(config["data"], args.roles)
-        write_json(Path(config["data"].processed_dir) / "data_source_validation.json", summary)
+        output_path = Path(config["data"].processed_dir) / "data_source_validation.json"
+        try:
+            summary = validate_stream_sources(config["data"], args.roles)
+        except Exception as exc:
+            write_json(
+                output_path,
+                {
+                    "validated_sources": [],
+                    "errors": [{"message": f"{type(exc).__name__}: {exc}"}],
+                },
+            )
+            raise
+        write_json(output_path, summary)
         return
     results = run_data_prep(config["data"])
     summary = {

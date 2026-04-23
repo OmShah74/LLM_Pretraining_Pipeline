@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import fields, is_dataclass
+import os
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -30,9 +31,13 @@ def dataclass_from_dict(cls: type[T], payload: dict[str, Any]) -> T:
 
 def load_full_config(path: str | Path) -> dict[str, Any]:
     payload = load_yaml(path)
+    runtime = dataclass_from_dict(RuntimeConfig, payload.get("runtime", {}))
+    data = dataclass_from_dict(DataConfig, payload.get("data", {}))
+    runtime = apply_runtime_env_overrides(runtime)
+    data = apply_data_env_overrides(data, runtime)
     return {
-        "runtime": dataclass_from_dict(RuntimeConfig, payload.get("runtime", {})),
-        "data": dataclass_from_dict(DataConfig, payload.get("data", {})),
+        "runtime": runtime,
+        "data": data,
         "model": ModelConfig(
             **{
                 **payload.get("model", {}),
@@ -42,6 +47,37 @@ def load_full_config(path: str | Path) -> dict[str, Any]:
         ),
         "train": dataclass_from_dict(TrainConfig, payload.get("train", {})),
     }
+
+
+def apply_runtime_env_overrides(runtime: RuntimeConfig) -> RuntimeConfig:
+    runtime.project_root = os.environ.get("LLM_PROJECT_ROOT", runtime.project_root)
+    runtime.artifact_dir = os.environ.get("LLM_ARTIFACT_DIR", runtime.artifact_dir)
+    return runtime
+
+
+def apply_data_env_overrides(data: DataConfig, runtime: RuntimeConfig) -> DataConfig:
+    raw_dir = os.environ.get("LLM_RAW_DIR")
+    processed_dir = os.environ.get("LLM_PROCESSED_DIR")
+    tokenizer_path = os.environ.get("LLM_TOKENIZER_PATH")
+    streaming_cache_dir = os.environ.get("LLM_STREAMING_CACHE_DIR")
+
+    if raw_dir:
+        data.raw_dir = raw_dir
+    if processed_dir:
+        data.processed_dir = processed_dir
+    if tokenizer_path:
+        data.tokenizer_path = tokenizer_path
+    if streaming_cache_dir:
+        data.streaming_cache_dir = streaming_cache_dir
+
+    hf_home = os.environ.get("HF_HOME")
+    hf_datasets_cache = os.environ.get("HF_DATASETS_CACHE")
+    if not streaming_cache_dir:
+        if hf_datasets_cache:
+            data.streaming_cache_dir = hf_datasets_cache
+        elif hf_home:
+            data.streaming_cache_dir = str(Path(hf_home) / "datasets")
+    return data
 
 
 def save_effective_config(path: str | Path, config: dict[str, Any]) -> None:

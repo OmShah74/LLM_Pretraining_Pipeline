@@ -2,6 +2,24 @@
 
 This repo now includes a **streaming dataset backend** so you do not need to manually store raw JSONL files before preprocessing. The pipeline can stream from curated Hugging Face datasets, clean/filter/deduplicate them, materialize only the cleaned training-ready corpora, train a BPE tokenizer, and then continue into pretraining/SFT/DPO/GRPO.
 
+## Google Drive on Colab
+If Colab shows `MessageError: [dfs_ephemeral] Credentials propagation unsuccessful`, use the updated notebook flow:
+- authenticate first with `google.colab.auth.authenticate_user()`
+- then mount Drive with `force_remount=True`
+- all caches and artifacts are redirected to Drive via environment variables
+
+The notebook now sets:
+- `LLM_ARTIFACT_DIR`
+- `LLM_RAW_DIR`
+- `LLM_PROCESSED_DIR`
+- `LLM_TOKENIZER_PATH`
+- `HF_HOME`
+- `HF_DATASETS_CACHE`
+- `TRANSFORMERS_CACHE`
+- `LLM_STREAMING_CACHE_DIR`
+
+This avoids depending on the small local Colab disk as much as possible.
+
 ## What Changed
 - Streaming dataset backend added
 - Heuristic quality filtering added
@@ -27,7 +45,7 @@ Default streaming sources are defined in [configs/profiles/real_150m_plus_spec.y
 
 - Pretraining:
   - `HuggingFaceFW/fineweb-edu` with `sample-10BT`
-  - `cerebras/SlimPajama-627B`
+  - `DKYoon/SlimPajama-6B`
 - SFT:
   - `ModelCloud/alpaca-data-cleaned`
   - `databricks/databricks-dolly-15k`

@@ -29,7 +29,7 @@ data:
     - name: slimpajama
       enabled: true
       role: pretrain
-      path: cerebras/SlimPajama-627B
+      path: DKYoon/SlimPajama-6B
       split: train
       text_field: text
       shuffle: true

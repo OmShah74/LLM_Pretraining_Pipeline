@@ -139,17 +139,35 @@ def _stream_and_clean_role(role: str, config: DataConfig) -> DatasetManifest | N
 def validate_stream_sources(config: DataConfig, roles: list[str] | None = None) -> dict[str, object]:
     requested_roles = set(roles or [source.get("role") for source in config.stream_sources if source.get("enabled", True)])
     reports: list[dict[str, object]] = []
+    errors: list[dict[str, str]] = []
     for source in config.stream_sources:
         if not source.get("enabled", True):
             continue
         role = str(source.get("role"))
         if role not in requested_roles:
             continue
-        report = validate_stream_source(source, config)
-        reports.append(report)
-    if not reports:
+        try:
+            report = validate_stream_source(source, config)
+            reports.append(report)
+        except Exception as exc:
+            errors.append(
+                {
+                    "name": str(source.get("name")),
+                    "role": role,
+                    "path": str(source.get("path")),
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+    if not reports and not errors:
         raise ValueError("No enabled streaming sources matched the requested roles.")
-    return {"validated_sources": reports}
+    summary = {"validated_sources": reports, "errors": errors}
+    if errors:
+        joined = "\n".join(
+            f"- source={item['name']} role={item['role']} path={item['path']} error={item['error']}"
+            for item in errors
+        )
+        raise RuntimeError(f"Some streaming sources failed validation:\n{joined}")
+    return summary
 
 
 def prepare_raw_sources(config: DataConfig) -> list[DatasetManifest]:

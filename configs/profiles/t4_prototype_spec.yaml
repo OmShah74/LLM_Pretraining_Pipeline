@@ -89,6 +89,9 @@ data:
   max_line_repeat_ratio: 0.25
   simhash_bits: 64
   simhash_bands: 4
+  progress_every_rows: 250
+  checkpoint_every_rows: 1000
+  flush_every_rows: 100
   max_records_per_role:
     pretrain: 5000
     sft: 5000

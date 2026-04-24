@@ -107,6 +107,9 @@ class DataConfig:
     max_line_repeat_ratio: float = 0.25
     simhash_bits: int = 64
     simhash_bands: int = 4
+    progress_every_rows: int = 500
+    checkpoint_every_rows: int = 2000
+    flush_every_rows: int = 250
     max_records_per_role: dict[str, int] = field(default_factory=dict)
     dataset_plan: dict[str, list[str]] = field(default_factory=dict)
 

@@ -7,3 +7,4 @@ def test_tokenizer_round_trip() -> None:
     decoded = tokenizer.decode(encoded)
     assert "hello" in decoded.lower()
     assert "world" in decoded.lower()
+

@@ -3,13 +3,12 @@ from __future__ import annotations
 import hashlib
 import re
 from pathlib import Path
-from typing import Iterable
 
 from src.data.quality import ApproxDeduper, quality_score
 from src.data.streaming import get_stream_sources_for_role, iter_stream_source, validate_stream_source
 from src.data.tokenizer import BPETokenizer
 from src.utils.contracts import DataConfig, DatasetManifest, TokenizerArtifact
-from src.utils.io import ensure_dir, read_json, read_jsonl, write_json, write_jsonl
+from src.utils.io import append_jsonl, ensure_dir, read_json, read_jsonl, write_json, write_jsonl
 
 
 ROLE_SCHEMAS: dict[str, tuple[str, ...]] = {
@@ -100,38 +99,134 @@ def _stream_and_clean_role(role: str, config: DataConfig) -> DatasetManifest | N
         return None
     processed_dir = ensure_dir(config.processed_dir)
     output_path = processed_dir / f"{role}_stream_cleaned.jsonl"
+    partial_output_path = processed_dir / f"{role}_stream_cleaned.partial.jsonl"
+    progress_path = processed_dir / f"{role}_stream_progress.json"
+    if partial_output_path.exists():
+        partial_output_path.unlink()
+    if output_path.exists():
+        output_path.unlink()
+    if progress_path.exists():
+        progress_path.unlink()
     deduper = ApproxDeduper(bits=config.simhash_bits, bands=config.simhash_bands)
     rows_written = 0
     max_records = int(config.max_records_per_role.get(role, 0))
-    cleaned_rows: list[dict[str, str]] = []
+    pending_rows: list[dict[str, str]] = []
+    total_seen = 0
+    total_cleaned = 0
+    total_filtered = 0
+    total_duplicates = 0
+    progress_every = max(int(config.progress_every_rows), 1)
+    checkpoint_every = max(int(config.checkpoint_every_rows), 1)
+    flush_every = max(int(config.flush_every_rows), 1)
+    source_stats: list[dict[str, int | str]] = []
+
+    def flush_pending() -> None:
+        nonlocal pending_rows
+        if pending_rows:
+            append_jsonl(partial_output_path, pending_rows)
+            pending_rows = []
+
+    def write_progress(current_source: str, source_seen: int, source_written: int, source_filtered: int, source_duplicates: int) -> None:
+        write_json(
+            progress_path,
+            {
+                "role": role,
+                "current_source": current_source,
+                "rows_seen": total_seen,
+                "rows_cleaned": total_cleaned,
+                "rows_written": rows_written,
+                "rows_filtered": total_filtered,
+                "rows_duplicates": total_duplicates,
+                "partial_output_path": str(partial_output_path),
+                "completed_output_path": str(output_path),
+                "source_seen": source_seen,
+                "source_written": source_written,
+                "source_filtered": source_filtered,
+                "source_duplicates": source_duplicates,
+            },
+        )
 
     for source in sources:
         print(f"[data.prepare] streaming role={role} source={source['name']} path={source['path']} split={source.get('split', 'train')}")
+        source_seen = 0
+        source_written = 0
+        source_filtered = 0
+        source_duplicates = 0
         for row in iter_stream_source(source, config):
+            total_seen += 1
+            source_seen += 1
             cleaned = _clean_record(role, row, config)
             if cleaned is None:
+                total_filtered += 1
+                source_filtered += 1
+                if total_seen % progress_every == 0:
+                    print(
+                        f"[data.prepare] progress role={role} source={source['name']} "
+                        f"seen={total_seen} written={rows_written} filtered={total_filtered} duplicates={total_duplicates}"
+                    )
                 continue
+            total_cleaned += 1
             dedup_text = " ".join(cleaned[field] for field in ROLE_SCHEMAS[role])
             if config.dedup and deduper.seen(dedup_text):
+                total_duplicates += 1
+                source_duplicates += 1
+                if total_seen % progress_every == 0:
+                    print(
+                        f"[data.prepare] progress role={role} source={source['name']} "
+                        f"seen={total_seen} written={rows_written} filtered={total_filtered} duplicates={total_duplicates}"
+                    )
                 continue
-            cleaned_rows.append(cleaned)
+            pending_rows.append(cleaned)
             rows_written += 1
+            source_written += 1
+            if len(pending_rows) >= flush_every:
+                flush_pending()
+            if rows_written % checkpoint_every == 0:
+                flush_pending()
+                write_progress(source["name"], source_seen, source_written, source_filtered, source_duplicates)
+                print(
+                    f"[data.prepare] checkpoint role={role} source={source['name']} "
+                    f"written={rows_written} partial_output={partial_output_path}"
+                )
+            elif total_seen % progress_every == 0:
+                print(
+                    f"[data.prepare] progress role={role} source={source['name']} "
+                    f"seen={total_seen} written={rows_written} filtered={total_filtered} duplicates={total_duplicates}"
+                )
             if max_records and rows_written >= max_records:
                 break
+        source_stats.append(
+            {
+                "name": str(source["name"]),
+                "seen": source_seen,
+                "written": source_written,
+                "filtered": source_filtered,
+                "duplicates": source_duplicates,
+            }
+        )
+        flush_pending()
+        write_progress(source["name"], source_seen, source_written, source_filtered, source_duplicates)
+        print(
+            f"[data.prepare] source-complete role={role} source={source['name']} "
+            f"seen={source_seen} written={source_written} filtered={source_filtered} duplicates={source_duplicates}"
+        )
         if max_records and rows_written >= max_records:
             break
 
-    if not cleaned_rows:
+    flush_pending()
+    if rows_written == 0:
         return None
-    write_jsonl(output_path, cleaned_rows)
+    partial_output_path.replace(output_path)
     manifest = DatasetManifest(
         name=f"{role}_stream_cleaned",
         role=role,
         path=str(output_path),
         num_records=rows_written,
-        metadata={"streaming": True, "sources": [source["name"] for source in sources]},
+        metadata={"streaming": True, "sources": [source["name"] for source in sources], "source_stats": source_stats},
     )
     write_json(processed_dir / f"{manifest.name}_manifest.json", manifest.to_dict())
+    if progress_path.exists():
+        progress_path.unlink()
     print(f"[data.prepare] completed role={role} rows={rows_written} output={output_path}")
     return manifest
 

@@ -78,6 +78,8 @@ Implemented now:
 - exact deduplication
 - approximate near-duplicate removal via SimHash
 - per-role max record limits
+- periodic progress logging during streaming prep
+- partial cleaned-output checkpoints during prep
 
 Still not industrial-grade:
 - no neural quality classifier yet
@@ -139,6 +141,8 @@ python -m src.inference.export --config configs/profiles/real_150m_plus_spec.yam
 ## How To Tell Whether Streaming Is Working
 When a full prep run is working you should see log lines like:
 - `[data.prepare] streaming role=pretrain source=fineweb_edu ...`
+- `[data.prepare] progress role=dpo source=ultrafeedback_cleaned seen=... written=... filtered=... duplicates=...`
+- `[data.prepare] checkpoint role=dpo source=ultrafeedback_cleaned written=... partial_output=...`
 - `[data.prepare] completed role=pretrain rows=... output=...`
 
 When source validation is working, it writes:
@@ -148,6 +152,10 @@ When full prep completes, you should see:
 - `artifacts/data/processed/*_stream_cleaned.jsonl`
 - `artifacts/data/processed/*_manifest.json`
 - `artifacts/data/processed/data_prep_summary.json`
+
+During long-running prep you should also see:
+- `artifacts/data/processed/*_stream_cleaned.partial.jsonl`
+- `artifacts/data/processed/*_stream_progress.json`
 
 If a dataset source is bad, you should now get an explicit error naming:
 - source name

@@ -31,6 +31,16 @@ def write_jsonl(path: str | Path, rows: list[dict[str, Any]]) -> None:
             handle.write(json.dumps(row, ensure_ascii=True) + "\n")
 
 
+def append_jsonl(path: str | Path, rows: list[dict[str, Any]]) -> None:
+    if not rows:
+        return
+    path_obj = Path(path)
+    ensure_dir(path_obj.parent)
+    with path_obj.open("a", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=True) + "\n")
+
+
 def read_jsonl(path: str | Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     with Path(path).open("r", encoding="utf-8") as handle:

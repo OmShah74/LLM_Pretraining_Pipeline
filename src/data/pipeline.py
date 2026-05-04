@@ -8,7 +8,7 @@ from src.data.quality import ApproxDeduper, quality_score
 from src.data.streaming import get_stream_sources_for_role, iter_stream_source, validate_stream_source
 from src.data.tokenizer import BPETokenizer
 from src.utils.contracts import DataConfig, DatasetManifest, TokenizerArtifact
-from src.utils.io import append_jsonl, count_jsonl, ensure_dir, iter_jsonl, read_json, read_jsonl, write_json, write_jsonl
+from src.utils.io import append_jsonl, count_jsonl, ensure_dir, iter_jsonl, read_json, write_json, write_jsonl
 from src.utils.logging import PipelineLogger
 
 
@@ -67,9 +67,13 @@ def _prepare_local_manifests(config: DataConfig) -> list[DatasetManifest]:
             if required:
                 missing_required.append(str(source_path))
             continue
-        rows = read_jsonl(source_path)
-        _validate_local_rows(role, rows, source_path)
-        manifests.append(DatasetManifest(name=name, role=role, path=str(source_path), num_records=len(rows), metadata={"synthetic": False}))
+        sample_rows = []
+        for row in iter_jsonl(source_path):
+            sample_rows.append(row)
+            if len(sample_rows) >= 10:
+                break
+        _validate_local_rows(role, sample_rows, source_path)
+        manifests.append(DatasetManifest(name=name, role=role, path=str(source_path), num_records=count_jsonl(source_path), metadata={"synthetic": False}))
     if missing_required:
         raise FileNotFoundError("Real dataset files are required before training. Expected JSONL files at:\n" + "\n".join(missing_required))
     if not manifests:
@@ -425,32 +429,27 @@ def train_or_load_tokenizer(config: DataConfig, manifests: list[DatasetManifest]
         except Exception:
             tokenizer_path.unlink()
     if tokenizer is None:
-        texts: list[str] = []
-        for manifest in manifests:
-            rows = read_jsonl(manifest.path)
-            logger.event("data.tokenizer", "collecting training texts", role=manifest.role, rows=len(rows), path=manifest.path)
-            if manifest.role == "pretrain":
-                texts.extend(row["text"] for row in rows)
-            elif manifest.role == "sft":
-                texts.extend(f"Instruction: {row['prompt']} Response: {row['response']}" for row in rows)
-            elif manifest.role == "dpo":
-                for row in rows:
-                    texts.extend(
-                        [
-                            f"Instruction: {row['prompt']} Response: {row['chosen']}",
-                            f"Instruction: {row['prompt']} Response: {row['rejected']}",
-                        ]
-                    )
-            elif manifest.role == "grpo":
-                texts.extend(f"Instruction: {row['prompt']} Response:" for row in rows)
+        def iter_texts():
+            for manifest in manifests:
+                logger.event("data.tokenizer", "streaming training texts", role=manifest.role, rows=manifest.num_records, path=manifest.path)
+                for row in iter_jsonl(manifest.path):
+                    if manifest.role == "pretrain":
+                        yield row["text"]
+                    elif manifest.role == "sft":
+                        yield f"Instruction: {row['prompt']} Response: {row['response']}"
+                    elif manifest.role == "dpo":
+                        yield f"Instruction: {row['prompt']} Response: {row['chosen']}"
+                        yield f"Instruction: {row['prompt']} Response: {row['rejected']}"
+                    elif manifest.role == "grpo":
+                        yield f"Instruction: {row['prompt']} Response:"
         tokenizer = BPETokenizer.train(
-            texts,
+            iter_texts(),
             max_vocab_size=config.max_vocab_size,
             min_frequency=config.min_frequency,
             lowercase=config.lowercase,
         )
         tokenizer.save(tokenizer_path)
-        logger.event("data.tokenizer", "trained tokenizer", path=str(tokenizer_path), texts=len(texts), vocab_size=len(tokenizer.token_to_id))
+        logger.event("data.tokenizer", "trained tokenizer", path=str(tokenizer_path), vocab_size=len(tokenizer.token_to_id))
     artifact = TokenizerArtifact(
         path=str(tokenizer_path),
         vocab_size=len(tokenizer.token_to_id),
@@ -473,42 +472,67 @@ def tokenize_and_pack(
 ) -> DatasetManifest:
     logger = logger or _make_data_logger(config)
     tokenizer = BPETokenizer.load(tokenizer_path)
-    rows = read_jsonl(manifest.path)
     processed_dir = ensure_dir(config.processed_dir)
-    output_path = processed_dir / f"{manifest.name}_packed.json"
-    sequences: list[list[int]] = []
-    logger.event("data.pack", "starting tokenize/pack", role=manifest.role, rows=len(rows), input=manifest.path, output=str(output_path))
+    output_path = processed_dir / f"{manifest.name}_packed.jsonl"
+    partial_output_path = processed_dir / f"{manifest.name}_packed.partial.jsonl"
+    if partial_output_path.exists():
+        partial_output_path.unlink()
+    if output_path.exists():
+        output_path.unlink()
+    pending_rows: list[dict[str, list[int]]] = []
+    sequences_written = 0
+    progress_every = max(int(config.progress_every_rows), 1)
+    flush_every = max(int(config.flush_every_rows), 1)
+    logger.event("data.pack", "starting tokenize/pack", role=manifest.role, rows=manifest.num_records, input=manifest.path, output=str(output_path))
+
+    def append_tokens(tokens: list[int]) -> None:
+        nonlocal sequences_written, pending_rows
+        if len(tokens) < 2:
+            return
+        pending_rows.append({"tokens": tokens})
+        sequences_written += 1
+        if len(pending_rows) >= flush_every:
+            append_jsonl(partial_output_path, pending_rows)
+            pending_rows = []
+
+    def flush_pending() -> None:
+        nonlocal pending_rows
+        if pending_rows:
+            append_jsonl(partial_output_path, pending_rows)
+            pending_rows = []
+
     if manifest.role == "pretrain":
-        for idx, row in enumerate(rows, start=1):
-            sequences.append(tokenizer.encode(row["text"], add_bos=True, add_eos=True))
-            if idx % max(int(config.progress_every_rows), 1) == 0:
-                logger.event("data.pack", "progress", role=manifest.role, rows=idx, sequences=len(sequences))
+        for idx, row in enumerate(iter_jsonl(manifest.path), start=1):
+            append_tokens(tokenizer.encode(row["text"], add_bos=True, add_eos=True))
+            if idx % progress_every == 0:
+                logger.event("data.pack", "progress", role=manifest.role, rows=idx, sequences=sequences_written)
     elif manifest.role == "sft":
-        for idx, row in enumerate(rows, start=1):
-            sequences.append(tokenizer.encode(f"Instruction: {row['prompt']} Response: {row['response']}", add_bos=True, add_eos=True))
-            if idx % max(int(config.progress_every_rows), 1) == 0:
-                logger.event("data.pack", "progress", role=manifest.role, rows=idx, sequences=len(sequences))
+        for idx, row in enumerate(iter_jsonl(manifest.path), start=1):
+            append_tokens(tokenizer.encode(f"Instruction: {row['prompt']} Response: {row['response']}", add_bos=True, add_eos=True))
+            if idx % progress_every == 0:
+                logger.event("data.pack", "progress", role=manifest.role, rows=idx, sequences=sequences_written)
     elif manifest.role == "dpo":
-        for idx, row in enumerate(rows, start=1):
-            sequences.append(tokenizer.encode(f"Instruction: {row['prompt']} Response: {row['chosen']}", add_bos=True, add_eos=True))
-            sequences.append(tokenizer.encode(f"Instruction: {row['prompt']} Response: {row['rejected']}", add_bos=True, add_eos=True))
-            if idx % max(int(config.progress_every_rows), 1) == 0:
-                logger.event("data.pack", "progress", role=manifest.role, rows=idx, sequences=len(sequences))
+        for idx, row in enumerate(iter_jsonl(manifest.path), start=1):
+            append_tokens(tokenizer.encode(f"Instruction: {row['prompt']} Response: {row['chosen']}", add_bos=True, add_eos=True))
+            append_tokens(tokenizer.encode(f"Instruction: {row['prompt']} Response: {row['rejected']}", add_bos=True, add_eos=True))
+            if idx % progress_every == 0:
+                logger.event("data.pack", "progress", role=manifest.role, rows=idx, sequences=sequences_written)
     elif manifest.role == "grpo":
-        for idx, row in enumerate(rows, start=1):
-            sequences.append(tokenizer.encode(f"Instruction: {row['prompt']} Response:", add_bos=True, add_eos=False))
-            if idx % max(int(config.progress_every_rows), 1) == 0:
-                logger.event("data.pack", "progress", role=manifest.role, rows=idx, sequences=len(sequences))
-    write_json(output_path, {"sequences": sequences, "tokenizer_path": tokenizer_path, "role": manifest.role})
+        for idx, row in enumerate(iter_jsonl(manifest.path), start=1):
+            append_tokens(tokenizer.encode(f"Instruction: {row['prompt']} Response:", add_bos=True, add_eos=False))
+            if idx % progress_every == 0:
+                logger.event("data.pack", "progress", role=manifest.role, rows=idx, sequences=sequences_written)
+    flush_pending()
+    partial_output_path.replace(output_path)
     packed_manifest = DatasetManifest(
         name=f"{manifest.name}_packed",
         role=manifest.role,
         path=str(output_path),
-        num_records=len(sequences),
+        num_records=sequences_written,
         metadata={"tokenizer_path": tokenizer_path},
     )
     write_json(processed_dir / f"{packed_manifest.name}_manifest.json", packed_manifest.to_dict())
-    logger.event("data.pack", "complete", role=manifest.role, sequences=len(sequences), output=str(output_path))
+    logger.event("data.pack", "complete", role=manifest.role, sequences=sequences_written, output=str(output_path))
     return packed_manifest
 
 
@@ -533,4 +557,7 @@ def run_data_prep(config: DataConfig) -> dict[str, object]:
 
 
 def load_packed_sequences(path: str) -> list[list[int]]:
+    path_obj = Path(path)
+    if path_obj.suffix == ".jsonl":
+        return [row["tokens"] for row in iter_jsonl(path_obj)]
     return read_json(path)["sequences"]

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterable
 
 from tokenizers import Tokenizer
 from tokenizers.decoders import ByteLevel as ByteLevelDecoder
@@ -28,7 +29,7 @@ class BPETokenizer:
     @classmethod
     def train(
         cls,
-        texts: list[str],
+        texts: Iterable[str],
         max_vocab_size: int,
         min_frequency: int,
         lowercase: bool = False,

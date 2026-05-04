@@ -6,7 +6,15 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
-from src.data.dataset import PackedSequenceDataset, PreferenceDataset, SFTDataset
+from src.data.dataset import (
+    JsonlPackedSequenceDataset,
+    JsonlPreferenceDataset,
+    JsonlSFTDataset,
+    PackedSequenceDataset,
+    PreferenceDataset,
+    SFTDataset,
+    _jsonl_offsets,
+)
 from src.data.pipeline import load_packed_sequences
 from src.data.tokenizer import BPETokenizer
 from src.model.transformer import MoEDecoderLM, build_model
@@ -69,14 +77,29 @@ def _resolve_processed_file(data_config: DataConfig, role: str, suffix: str) -> 
     return candidates[0]
 
 
+def _split_offsets(path: Path, val_ratio: float) -> tuple[list[int], list[int]]:
+    offsets = _jsonl_offsets(path)
+    split = max(1, int(len(offsets) * (1.0 - val_ratio)))
+    train_offsets = offsets[:split]
+    val_offsets = offsets[split:] or offsets[-1:]
+    return train_offsets, val_offsets
+
+
 def build_pretrain_dataloaders(data_config: DataConfig, tokenizer: BPETokenizer, train_config: TrainConfig) -> tuple[DataLoader, DataLoader]:
-    packed = load_packed_sequences(str(_resolve_processed_file(data_config, "pretrain", "_packed.json")))
-    split = max(1, int(len(packed) * (1.0 - data_config.val_ratio)))
-    train_rows = packed[:split]
-    val_rows = packed[split:] or packed[-1:]
     pad_id = tokenizer.token_to_id[tokenizer.pad_token]
-    train_ds = PackedSequenceDataset(train_rows, data_config.pretrain_seq_len, pad_id)
-    val_ds = PackedSequenceDataset(val_rows, data_config.pretrain_seq_len, pad_id)
+    try:
+        packed_path = _resolve_processed_file(data_config, "pretrain", "_packed.jsonl")
+    except FileNotFoundError:
+        packed = load_packed_sequences(str(_resolve_processed_file(data_config, "pretrain", "_packed.json")))
+        split = max(1, int(len(packed) * (1.0 - data_config.val_ratio)))
+        train_rows = packed[:split]
+        val_rows = packed[split:] or packed[-1:]
+        train_ds = PackedSequenceDataset(train_rows, data_config.pretrain_seq_len, pad_id)
+        val_ds = PackedSequenceDataset(val_rows, data_config.pretrain_seq_len, pad_id)
+    else:
+        train_offsets, val_offsets = _split_offsets(packed_path, data_config.val_ratio)
+        train_ds = JsonlPackedSequenceDataset(packed_path, data_config.pretrain_seq_len, pad_id, train_offsets)
+        val_ds = JsonlPackedSequenceDataset(packed_path, data_config.pretrain_seq_len, pad_id, val_offsets)
     return (
         DataLoader(train_ds, batch_size=train_config.batch_size, shuffle=True),
         DataLoader(val_ds, batch_size=train_config.eval_batch_size, shuffle=False),
@@ -84,10 +107,10 @@ def build_pretrain_dataloaders(data_config: DataConfig, tokenizer: BPETokenizer,
 
 
 def build_sft_dataloaders(data_config: DataConfig, tokenizer: BPETokenizer, train_config: TrainConfig) -> tuple[DataLoader, DataLoader]:
-    rows = read_jsonl(_resolve_processed_file(data_config, "sft", "_cleaned.jsonl"))
-    split = max(1, int(len(rows) * (1.0 - data_config.val_ratio)))
-    train_ds = SFTDataset(rows[:split], tokenizer, data_config.sft_seq_len)
-    val_ds = SFTDataset(rows[split:] or rows[-1:], tokenizer, data_config.sft_seq_len)
+    path = _resolve_processed_file(data_config, "sft", "_cleaned.jsonl")
+    train_offsets, val_offsets = _split_offsets(path, data_config.val_ratio)
+    train_ds = JsonlSFTDataset(path, tokenizer, data_config.sft_seq_len, train_offsets)
+    val_ds = JsonlSFTDataset(path, tokenizer, data_config.sft_seq_len, val_offsets)
     return (
         DataLoader(train_ds, batch_size=train_config.batch_size, shuffle=True),
         DataLoader(val_ds, batch_size=train_config.eval_batch_size, shuffle=False),
@@ -95,10 +118,10 @@ def build_sft_dataloaders(data_config: DataConfig, tokenizer: BPETokenizer, trai
 
 
 def build_dpo_dataloaders(data_config: DataConfig, tokenizer: BPETokenizer, train_config: TrainConfig) -> tuple[DataLoader, DataLoader]:
-    rows = read_jsonl(_resolve_processed_file(data_config, "dpo", "_cleaned.jsonl"))
-    split = max(1, int(len(rows) * (1.0 - data_config.val_ratio)))
-    train_ds = PreferenceDataset(rows[:split], tokenizer, data_config.dpo_seq_len)
-    val_ds = PreferenceDataset(rows[split:] or rows[-1:], tokenizer, data_config.dpo_seq_len)
+    path = _resolve_processed_file(data_config, "dpo", "_cleaned.jsonl")
+    train_offsets, val_offsets = _split_offsets(path, data_config.val_ratio)
+    train_ds = JsonlPreferenceDataset(path, tokenizer, data_config.dpo_seq_len, train_offsets)
+    val_ds = JsonlPreferenceDataset(path, tokenizer, data_config.dpo_seq_len, val_offsets)
     return (
         DataLoader(train_ds, batch_size=train_config.batch_size, shuffle=True),
         DataLoader(val_ds, batch_size=train_config.eval_batch_size, shuffle=False),

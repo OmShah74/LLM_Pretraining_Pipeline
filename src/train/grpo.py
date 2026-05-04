@@ -12,6 +12,7 @@ from src.train.checkpoint import load_checkpoint, load_latest_metadata, save_che
 from src.train.common import _resolve_processed_file, build_optimizer, build_scheduler, load_tokenizer, setup_run
 from src.utils.config import load_full_config
 from src.utils.io import read_jsonl, write_json
+from src.utils.logging import PipelineLogger
 from src.utils.runtime import autocast_context
 
 
@@ -92,14 +93,17 @@ def _sequence_logprob(model: MoEDecoderLM, full_ids: list[int], prompt_len: int,
 
 def run_grpo_experimental(config_path: str) -> dict[str, float | str]:
     config, rows = _build_grpo_rows(config_path)
+    logger = PipelineLogger(config["runtime"].log_dir, "grpo")
     device, model = setup_run(config_path, config["runtime"], config["model"], config["train"])
     tokenizer = load_tokenizer(config["data"])
+    logger.event("train.grpo", "starting stage", rows=len(rows), max_steps=config["train"].max_steps)
 
     latest = load_latest_metadata(Path(config["runtime"].artifact_dir) / "checkpoints", "dpo")
     if latest is None:
         latest = load_latest_metadata(Path(config["runtime"].artifact_dir) / "checkpoints", "sft")
     if latest is not None:
         load_checkpoint(latest.path, model, optimizer=None, device=device, strict=False)
+        logger.event("train.grpo", "loaded base checkpoint", checkpoint=latest.path, source_stage=latest.stage)
 
     reference_model = copy.deepcopy(model).to(device)
     reference_model.eval()
@@ -116,6 +120,8 @@ def run_grpo_experimental(config_path: str) -> dict[str, float | str]:
     global_step = 0
     latest_metrics: dict[str, float | str] = {}
     checkpoint_dir = Path(config["runtime"].artifact_dir) / "checkpoints"
+    log_every = max(int(config["train"].log_every_steps), 1)
+    save_every = max(int(config["train"].save_every_steps), 1)
 
     while global_step < config["train"].max_steps:
         for row in rows:
@@ -156,8 +162,18 @@ def run_grpo_experimental(config_path: str) -> dict[str, float | str]:
                 "mean_reward": float(rewards.mean().detach().cpu().item()),
                 "learning_rate": float(optimizer.param_groups[0]["lr"]),
             }
-            if global_step % config["train"].save_every_steps == 0:
-                save_checkpoint(
+            if global_step % log_every == 0:
+                logger.event(
+                    "train.grpo",
+                    "step",
+                    step=global_step,
+                    grpo_stage=str(latest_metrics["stage"]),
+                    grpo_loss=float(latest_metrics["grpo_loss"]),
+                    mean_reward=float(latest_metrics["mean_reward"]),
+                    learning_rate=float(latest_metrics["learning_rate"]),
+                )
+            if global_step % save_every == 0:
+                metadata = save_checkpoint(
                     checkpoint_dir,
                     "grpo",
                     global_step,
@@ -168,10 +184,11 @@ def run_grpo_experimental(config_path: str) -> dict[str, float | str]:
                     config["data"].tokenizer_path,
                     {k: float(v) if isinstance(v, (int, float)) else 0.0 for k, v in latest_metrics.items() if k != "stage"},
                 )
+                logger.event("train.grpo", "checkpoint saved", step=global_step, checkpoint=metadata.path)
             if global_step >= config["train"].max_steps:
                 break
 
-    save_checkpoint(
+    metadata = save_checkpoint(
         checkpoint_dir,
         "grpo",
         global_step,
@@ -183,6 +200,7 @@ def run_grpo_experimental(config_path: str) -> dict[str, float | str]:
         {k: float(v) if isinstance(v, (int, float)) else 0.0 for k, v in latest_metrics.items() if k != "stage"},
     )
     write_json(Path(config["runtime"].artifact_dir) / "grpo_metrics.json", latest_metrics)
+    logger.event("train.grpo", "stage complete", step=global_step, checkpoint=metadata.path, metrics_path=str(Path(config["runtime"].artifact_dir) / "grpo_metrics.json"))
     return latest_metrics
 
 

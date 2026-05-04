@@ -2,6 +2,7 @@ runtime:
   profile_name: real_150m_plus_spec
   project_root: .
   artifact_dir: artifacts
+  log_dir: artifacts/logs
   seed: 42
   device: auto
   use_mixed_precision: true
@@ -10,6 +11,7 @@ runtime:
 data:
   raw_dir: artifacts/data/raw
   processed_dir: artifacts/data/processed
+  log_dir: artifacts/logs
   tokenizer_path: artifacts/tokenizer/tokenizer.json
   tokenizer_type: byte_level_bpe
   require_real_data: true

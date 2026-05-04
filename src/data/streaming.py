@@ -40,29 +40,33 @@ def _map_record(role: str, record: dict[str, Any], source: dict[str, Any]) -> di
     return None
 
 
-def iter_stream_source(source: dict[str, Any], config: DataConfig) -> Iterable[dict[str, str]]:
+def load_source_dataset(source: dict[str, Any], config: DataConfig) -> Any:
     try:
-        dataset = load_dataset(
+        return load_dataset(
             path=source["path"],
             name=source.get("name_config"),
             split=source.get("split", "train"),
-            streaming=True,
+            streaming=False,
             trust_remote_code=bool(source.get("trust_remote_code", False)),
             cache_dir=config.streaming_cache_dir,
         )
     except DatasetNotFoundError as exc:
         raise RuntimeError(
-            f"Streaming source '{source['name']}' could not be loaded. "
+            f"Hugging Face source '{source['name']}' could not be loaded. "
             f"path={source['path']} name_config={source.get('name_config')} split={source.get('split', 'train')}"
         ) from exc
     except Exception as exc:
         raise RuntimeError(
-            f"Streaming source '{source['name']}' failed during dataset initialization. "
+            f"Hugging Face source '{source['name']}' failed during dataset download/initialization. "
             f"path={source['path']} name_config={source.get('name_config')} split={source.get('split', 'train')} "
             f"error={type(exc).__name__}: {exc}"
         ) from exc
+
+
+def iter_stream_source(source: dict[str, Any], config: DataConfig) -> Iterable[dict[str, str]]:
+    dataset = load_source_dataset(source, config)
     if source.get("shuffle", False):
-        dataset = dataset.shuffle(seed=int(source.get("seed", 42)), buffer_size=int(source.get("shuffle_buffer", 10_000)))
+        dataset = dataset.shuffle(seed=int(source.get("seed", 42)))
     take = int(source.get("take", 0))
     count = 0
     role = str(source["role"])
@@ -85,7 +89,7 @@ def validate_stream_source(source: dict[str, Any], config: DataConfig) -> dict[s
     first = next(iterator, None)
     if first is None:
         raise RuntimeError(
-            f"Streaming source '{source['name']}' loaded but produced no usable rows. "
+            f"Hugging Face source '{source['name']}' loaded but produced no usable rows. "
             f"path={source['path']} name_config={source.get('name_config')} split={source.get('split', 'train')}"
         )
     return {

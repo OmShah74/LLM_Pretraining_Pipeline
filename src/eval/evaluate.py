@@ -9,16 +9,20 @@ from src.train.common import build_pretrain_dataloaders, evaluate_language_model
 from src.utils.config import load_full_config
 from src.utils.contracts import EvalReport, GenerationConfig
 from src.utils.io import write_json
+from src.utils.logging import PipelineLogger
 
 
 def run_eval(config_path: str, stage: str = "pretrain") -> EvalReport:
     config = load_full_config(config_path)
+    logger = PipelineLogger(config["runtime"].log_dir, "eval")
+    logger.event("eval", "starting evaluation", eval_stage=stage)
     device, model = setup_run(config_path, config["runtime"], config["model"], config["train"])
     tokenizer = load_tokenizer(config["data"])
     _, eval_loader = build_pretrain_dataloaders(config["data"], tokenizer, config["train"])
     latest = load_latest_metadata(Path(config["runtime"].artifact_dir) / "checkpoints", stage)
     if latest is not None:
         load_checkpoint(latest.path, model, optimizer=None, device=device, strict=False)
+        logger.event("eval", "loaded checkpoint", eval_stage=stage, checkpoint=latest.path)
     metrics = evaluate_language_model(model, eval_loader, device)
     sample = generate_text(model, tokenizer, "Explain mixture of experts", GenerationConfig(), device)
     report = EvalReport(
@@ -28,6 +32,7 @@ def run_eval(config_path: str, stage: str = "pretrain") -> EvalReport:
         samples=[{"prompt": "Explain mixture of experts", "output": sample}],
     )
     write_json(report.path, report.to_dict())
+    logger.event("eval", "complete", eval_stage=stage, report=report.path, **metrics)
     return report
 
 

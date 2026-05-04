@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import fields, is_dataclass
+from dataclasses import MISSING, fields, is_dataclass
 import os
 from pathlib import Path
 from typing import Any, TypeVar
@@ -24,8 +24,14 @@ def dataclass_from_dict(cls: type[T], payload: dict[str, Any]) -> T:
         field_value = payload.get(field_def.name)
         if hasattr(field_def.type, "__dataclass_fields__") and isinstance(field_value, dict):
             values[field_def.name] = dataclass_from_dict(field_def.type, field_value)
+        elif field_value is not None:
+            values[field_def.name] = field_value
+        elif field_def.default is not MISSING:
+            values[field_def.name] = field_def.default
+        elif field_def.default_factory is not MISSING:
+            values[field_def.name] = field_def.default_factory()
         else:
-            values[field_def.name] = field_value if field_value is not None else field_def.default
+            values[field_def.name] = None
     return cls(**values)
 
 
@@ -51,7 +57,14 @@ def load_full_config(path: str | Path) -> dict[str, Any]:
 
 def apply_runtime_env_overrides(runtime: RuntimeConfig) -> RuntimeConfig:
     runtime.project_root = os.environ.get("LLM_PROJECT_ROOT", runtime.project_root)
-    runtime.artifact_dir = os.environ.get("LLM_ARTIFACT_DIR", runtime.artifact_dir)
+    artifact_dir = os.environ.get("LLM_ARTIFACT_DIR")
+    if artifact_dir:
+        runtime.artifact_dir = artifact_dir
+    log_dir = os.environ.get("LLM_LOG_DIR")
+    if log_dir:
+        runtime.log_dir = log_dir
+    elif artifact_dir or runtime.log_dir == "artifacts/logs":
+        runtime.log_dir = str(Path(runtime.artifact_dir) / "logs")
     return runtime
 
 
@@ -60,6 +73,7 @@ def apply_data_env_overrides(data: DataConfig, runtime: RuntimeConfig) -> DataCo
     processed_dir = os.environ.get("LLM_PROCESSED_DIR")
     tokenizer_path = os.environ.get("LLM_TOKENIZER_PATH")
     streaming_cache_dir = os.environ.get("LLM_STREAMING_CACHE_DIR")
+    log_dir = os.environ.get("LLM_LOG_DIR")
 
     if raw_dir:
         data.raw_dir = raw_dir
@@ -67,6 +81,10 @@ def apply_data_env_overrides(data: DataConfig, runtime: RuntimeConfig) -> DataCo
         data.processed_dir = processed_dir
     if tokenizer_path:
         data.tokenizer_path = tokenizer_path
+    if log_dir:
+        data.log_dir = log_dir
+    elif data.log_dir == "artifacts/logs":
+        data.log_dir = str(Path(runtime.artifact_dir) / "logs")
     if streaming_cache_dir:
         data.streaming_cache_dir = streaming_cache_dir
 

@@ -1,6 +1,6 @@
 # MoE LLM Training Repo
 
-This repo now includes a **streaming dataset backend** so you do not need to manually store raw JSONL files before preprocessing. The pipeline can stream from curated Hugging Face datasets, clean/filter/deduplicate them, materialize only the cleaned training-ready corpora, train a BPE tokenizer, and then continue into pretraining/SFT/DPO/GRPO.
+This repo now includes a **download-then-process dataset backend** so you do not need to manually create raw JSONL files before preprocessing. The pipeline downloads the configured Hugging Face datasets into the local/Drive cache, materializes raw per-role JSONL files, then runs cleaning, filtering, deduplication, tokenizer training, packing, pretraining, SFT, DPO, and GRPO with visible console logs plus persistent log files.
 
 ## Google Drive on Colab
 If Colab shows `MessageError: [dfs_ephemeral] Credentials propagation unsuccessful`, use the updated notebook flow:
@@ -10,6 +10,7 @@ If Colab shows `MessageError: [dfs_ephemeral] Credentials propagation unsuccessf
 
 The notebook now sets:
 - `LLM_ARTIFACT_DIR`
+- `LLM_LOG_DIR`
 - `LLM_RAW_DIR`
 - `LLM_PROCESSED_DIR`
 - `LLM_TOKENIZER_PATH`
@@ -21,11 +22,11 @@ The notebook now sets:
 This avoids depending on the small local Colab disk as much as possible.
 
 ## What Changed
-- Streaming dataset backend added
+- Hugging Face dataset materialization backend added
 - Heuristic quality filtering added
 - Approximate near-duplicate removal added with SimHash banding
 - Data prep no longer requires hand-created raw JSONL inputs when `stream_sources` are configured
-- Cleaned/tokenized outputs are still materialized locally because tokenization and training need deterministic artifacts
+- Raw, cleaned, tokenized, checkpoint, release, and log artifacts are materialized for deterministic resumed runs
 
 ## Architecture
 - Decoder-only causal LM
@@ -40,8 +41,8 @@ This avoids depending on the small local Colab disk as much as possible.
 - `AdamW` with proper no-decay groups
 - Cosine LR scheduler with warmup
 
-## Streaming Dataset Plan
-Default streaming sources are defined in [configs/profiles/real_150m_plus_spec.yaml](</c:/Users/OM%20SHAH/Desktop/DeepLearning_Projects/LLM_Pretraining_Pipeline/configs/profiles/real_150m_plus_spec.yaml>):
+## Dataset Plan
+Default Hugging Face sources are defined in [configs/profiles/real_150m_plus_spec.yaml](</c:/Users/OM%20SHAH/Desktop/DeepLearning_Projects/LLM_Pretraining_Pipeline/configs/profiles/real_150m_plus_spec.yaml>):
 
 - Pretraining:
   - `HuggingFaceFW/fineweb-edu` with `sample-10BT`
@@ -55,17 +56,19 @@ Default streaming sources are defined in [configs/profiles/real_150m_plus_spec.y
   - `openai/gsm8k`
 
 ## What Gets Stored
-Not stored:
-- full raw downloaded corpora
-
 Stored:
-- cleaned streamed subsets
+- Hugging Face download cache
+- raw per-role JSONL files
+- cleaned dataset subsets
 - manifests
 - tokenizer artifacts
 - packed token sequences
-- checkpoints and release artifacts
+- checkpoints, release artifacts, and logs
 
-This is the practical compromise needed for resumable training.
+On Colab, the notebook routes these paths to Google Drive, so pretraining and post-training checkpoints are stored under:
+- `/content/drive/MyDrive/LLM_Pretraining_Pipeline/artifacts/checkpoints`
+- `/content/drive/MyDrive/LLM_Pretraining_Pipeline/artifacts/release`
+- `/content/drive/MyDrive/LLM_Pretraining_Pipeline/artifacts/logs`
 
 ## Cleaning / Filtering
 Implemented now:
@@ -78,8 +81,8 @@ Implemented now:
 - exact deduplication
 - approximate near-duplicate removal via SimHash
 - per-role max record limits
-- periodic progress logging during streaming prep
-- partial cleaned-output checkpoints during prep
+- periodic progress logging during download, cleaning, tokenization, packing, training, evaluation, and checkpointing
+- partial raw/cleaned-output checkpoints during prep
 
 Still not industrial-grade:
 - no neural quality classifier yet
@@ -93,7 +96,7 @@ Still not industrial-grade:
 python -m pip install -r requirements.txt
 ```
 
-2. Validate the streaming sources first
+2. Validate the Hugging Face sources first
 ```bash
 python -m src.data.prepare --config configs/profiles/real_150m_plus_spec.yaml --validate-only
 ```
@@ -103,7 +106,7 @@ python -m src.data.prepare --config configs/profiles/real_150m_plus_spec.yaml --
 python -m src.data.prepare --config configs/profiles/real_150m_plus_spec.yaml --validate-only --roles pretrain
 ```
 
-4. Prepare streamed data, cleaned corpora, manifests, tokenizer, and packed sequences
+4. Download/materialize raw data, clean corpora, write manifests, train tokenizer, and pack sequences
 ```bash
 python -m src.data.prepare --config configs/profiles/real_150m_plus_spec.yaml
 ```
@@ -138,24 +141,35 @@ python -m src.eval.evaluate --config configs/profiles/real_150m_plus_spec.yaml -
 python -m src.inference.export --config configs/profiles/real_150m_plus_spec.yaml --stage dpo
 ```
 
-## How To Tell Whether Streaming Is Working
+## How To Track Progress
 When a full prep run is working you should see log lines like:
-- `[data.prepare] streaming role=pretrain source=fineweb_edu ...`
-- `[data.prepare] progress role=dpo source=ultrafeedback_cleaned seen=... written=... filtered=... duplicates=...`
-- `[data.prepare] checkpoint role=dpo source=ultrafeedback_cleaned written=... partial_output=...`
-- `[data.prepare] completed role=pretrain rows=... output=...`
+- `[data.download] starting source download/materialization role=pretrain source=fineweb_edu ...`
+- `[data.download] progress role=dpo source=ultrafeedback_cleaned seen=... written=...`
+- `[data.clean] checkpoint role=dpo seen=... cleaned=... filtered=... duplicates=...`
+- `[data.pack] complete role=pretrain sequences=... output=...`
+- `[train] step train_stage=pretrain step=... train_loss=... learning_rate=...`
+- `[train] checkpoint saved train_stage=pretrain step=... checkpoint=...`
+
+The main persistent logs are:
+- `artifacts/logs/pipeline.log`
+- `artifacts/logs/pipeline_events.jsonl`
 
 When source validation is working, it writes:
 - `artifacts/data/processed/data_source_validation.json`
 
 When full prep completes, you should see:
-- `artifacts/data/processed/*_stream_cleaned.jsonl`
+- `artifacts/data/raw/pretrain.jsonl`
+- `artifacts/data/raw/sft.jsonl`
+- `artifacts/data/raw/dpo.jsonl`
+- `artifacts/data/processed/*_cleaned.jsonl`
 - `artifacts/data/processed/*_manifest.json`
 - `artifacts/data/processed/data_prep_summary.json`
 
 During long-running prep you should also see:
-- `artifacts/data/processed/*_stream_cleaned.partial.jsonl`
-- `artifacts/data/processed/*_stream_progress.json`
+- `artifacts/data/raw/*.download.partial.jsonl`
+- `artifacts/data/raw/*_download_progress.json`
+- `artifacts/data/processed/*_cleaned.partial.jsonl`
+- `artifacts/data/processed/*_clean_progress.json`
 
 If a dataset source is bad, you should now get an explicit error naming:
 - source name
@@ -165,7 +179,7 @@ If a dataset source is bad, you should now get an explicit error naming:
 
 ## Practical Readiness
 Ready now:
-- streaming extraction
+- Hugging Face source download/materialization
 - cleaning and filtering
 - approximate near-duplicate removal
 - tokenizer training

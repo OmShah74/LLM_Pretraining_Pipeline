@@ -46,6 +46,7 @@ class RuntimeConfig:
     profile_name: str = "t4_prototype_spec"
     project_root: str = "."
     artifact_dir: str = "artifacts"
+    log_dir: str = "artifacts/logs"
     seed: int = 42
     device: str = "auto"
     use_mixed_precision: bool = True
@@ -81,6 +82,7 @@ class TrainConfig:
 class DataConfig:
     raw_dir: str = "artifacts/data/raw"
     processed_dir: str = "artifacts/data/processed"
+    log_dir: str = "artifacts/logs"
     tokenizer_path: str = "artifacts/tokenizer/tokenizer.json"
     tokenizer_type: str = "byte_level_bpe"
     require_real_data: bool = True

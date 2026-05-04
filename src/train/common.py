@@ -14,6 +14,7 @@ from src.train.checkpoint import load_checkpoint, save_checkpoint
 from src.utils.config import save_effective_config
 from src.utils.contracts import DataConfig, ModelConfig, RuntimeConfig, TrainConfig
 from src.utils.io import ensure_dir, read_jsonl, write_json
+from src.utils.logging import PipelineLogger
 from src.utils.runtime import autocast_context, resolve_device, set_seed
 
 
@@ -115,6 +116,14 @@ def setup_run(
     model = build_model(model_config).to(device)
     if runtime_config.gradient_checkpointing:
         model.enable_gradient_checkpointing()
+    logger = PipelineLogger(runtime_config.log_dir, "training")
+    logger.event(
+        "train.setup",
+        "initialized run",
+        profile=runtime_config.profile_name,
+        device=str(device),
+        artifact_dir=runtime_config.artifact_dir,
+    )
     config_dir = ensure_dir(Path(runtime_config.artifact_dir) / "configs")
     save_effective_config(config_dir / f"{Path(config_path).stem}_effective.yaml", {
         "runtime": runtime_config,
@@ -155,6 +164,16 @@ def train_language_model(
     tokenizer_path: str,
     config_path: str,
 ) -> dict[str, float]:
+    logger = PipelineLogger(runtime_config.log_dir, stage)
+    logger.event(
+        "train",
+        "starting stage",
+        train_stage=stage,
+        epochs=train_config.epochs,
+        max_steps=train_config.max_steps,
+        train_batches=len(train_loader),
+        eval_batches=len(eval_loader),
+    )
     optimizer = build_optimizer(model, train_config)
     scheduler = build_scheduler(optimizer, train_config)
     start_step = 0
@@ -163,13 +182,18 @@ def train_language_model(
         state = load_checkpoint(train_config.resume_from, model, optimizer, device)
         start_step = int(state["step"])
         start_epoch = int(state["epoch"])
+        logger.event("train", "resumed checkpoint", train_stage=stage, step=start_step, epoch=start_epoch, checkpoint=train_config.resume_from)
 
     scaler = torch.amp.GradScaler("cuda", enabled=runtime_config.use_mixed_precision and device.type == "cuda")
     global_step = start_step
     latest_metrics: dict[str, float] = {}
     checkpoint_dir = Path(runtime_config.artifact_dir) / "checkpoints"
+    log_every = max(int(train_config.log_every_steps), 1)
+    eval_every = max(int(train_config.eval_every_steps), 1)
+    save_every = max(int(train_config.save_every_steps), 1)
 
     for epoch in range(start_epoch, train_config.epochs):
+        logger.event("train", "starting epoch", train_stage=stage, epoch=epoch)
         model.train()
         optimizer.zero_grad(set_to_none=True)
         for step, batch in enumerate(train_loader, start=1):
@@ -194,16 +218,21 @@ def train_language_model(
                 }
                 for key, value in output.metrics.items():
                     latest_metrics[key] = float(value)
-                if global_step % train_config.eval_every_steps == 0:
+                if global_step % log_every == 0:
+                    logger.event("train", "step", train_stage=stage, epoch=epoch, step=global_step, **latest_metrics)
+                if global_step % eval_every == 0:
                     latest_metrics.update({f"eval_{k}": v for k, v in evaluate_language_model(model, eval_loader, device).items()})
-                if global_step % train_config.save_every_steps == 0:
-                    save_checkpoint(checkpoint_dir, stage, global_step, epoch, model, optimizer, config_path, tokenizer_path, latest_metrics)
+                    logger.event("train", "evaluation", train_stage=stage, epoch=epoch, step=global_step, **latest_metrics)
+                if global_step % save_every == 0:
+                    metadata = save_checkpoint(checkpoint_dir, stage, global_step, epoch, model, optimizer, config_path, tokenizer_path, latest_metrics)
+                    logger.event("train", "checkpoint saved", train_stage=stage, epoch=epoch, step=global_step, checkpoint=metadata.path)
                 if global_step >= train_config.max_steps:
                     break
         if global_step >= train_config.max_steps:
             break
-    save_checkpoint(checkpoint_dir, stage, global_step, epoch, model, optimizer, config_path, tokenizer_path, latest_metrics)
+    metadata = save_checkpoint(checkpoint_dir, stage, global_step, epoch, model, optimizer, config_path, tokenizer_path, latest_metrics)
     write_json(Path(runtime_config.artifact_dir) / f"{stage}_metrics.json", latest_metrics)
+    logger.event("train", "stage complete", train_stage=stage, step=global_step, checkpoint=metadata.path, metrics_path=str(Path(runtime_config.artifact_dir) / f"{stage}_metrics.json"))
     return latest_metrics
 
 
@@ -228,12 +257,24 @@ def train_dpo(
     stage: str = "dpo",
     beta: float = 0.1,
 ) -> dict[str, float]:
+    logger = PipelineLogger(runtime_config.log_dir, stage)
+    logger.event(
+        "train.dpo",
+        "starting stage",
+        train_stage=stage,
+        epochs=train_config.epochs,
+        max_steps=train_config.max_steps,
+        train_batches=len(train_loader),
+        eval_batches=len(eval_loader),
+    )
     optimizer = build_optimizer(model, train_config)
     scheduler = build_scheduler(optimizer, train_config)
     checkpoint_dir = Path(runtime_config.artifact_dir) / "checkpoints"
     global_step = 0
     latest_metrics: dict[str, float] = {}
     scaler = torch.amp.GradScaler("cuda", enabled=runtime_config.use_mixed_precision and device.type == "cuda")
+    log_every = max(int(train_config.log_every_steps), 1)
+    save_every = max(int(train_config.save_every_steps), 1)
 
     for epoch in range(train_config.epochs):
         model.train()
@@ -260,8 +301,11 @@ def train_dpo(
                 "preference_margin": float(preference_margin.mean().detach().cpu().item()),
                 "learning_rate": float(optimizer.param_groups[0]["lr"]),
             }
-            if global_step % train_config.save_every_steps == 0:
-                save_checkpoint(checkpoint_dir, stage, global_step, epoch, model, optimizer, config_path, tokenizer_path, latest_metrics)
+            if global_step % log_every == 0:
+                logger.event("train.dpo", "step", train_stage=stage, epoch=epoch, step=global_step, **latest_metrics)
+            if global_step % save_every == 0:
+                metadata = save_checkpoint(checkpoint_dir, stage, global_step, epoch, model, optimizer, config_path, tokenizer_path, latest_metrics)
+                logger.event("train.dpo", "checkpoint saved", train_stage=stage, epoch=epoch, step=global_step, checkpoint=metadata.path)
             if global_step >= train_config.max_steps:
                 break
         if global_step >= train_config.max_steps:
@@ -275,6 +319,8 @@ def train_dpo(
             rejected_scores = compute_sequence_logprob(model, batch["rejected_input_ids"].to(device), batch["rejected_labels"].to(device))
             val_margins.append(float((chosen_scores - rejected_scores).mean().detach().cpu().item()))
     latest_metrics["eval_preference_margin"] = sum(val_margins) / max(len(val_margins), 1)
-    save_checkpoint(checkpoint_dir, stage, global_step, epoch, model, optimizer, config_path, tokenizer_path, latest_metrics)
+    logger.event("train.dpo", "evaluation", train_stage=stage, step=global_step, eval_preference_margin=latest_metrics["eval_preference_margin"])
+    metadata = save_checkpoint(checkpoint_dir, stage, global_step, epoch, model, optimizer, config_path, tokenizer_path, latest_metrics)
     write_json(Path(runtime_config.artifact_dir) / f"{stage}_metrics.json", latest_metrics)
+    logger.event("train.dpo", "stage complete", train_stage=stage, step=global_step, checkpoint=metadata.path, metrics_path=str(Path(runtime_config.artifact_dir) / f"{stage}_metrics.json"))
     return latest_metrics
